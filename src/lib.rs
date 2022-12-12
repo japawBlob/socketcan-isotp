@@ -43,10 +43,7 @@
 
 use bitflags::bitflags;
 pub use embedded_can::{ExtendedId, Id, StandardId};
-use libc::{
-    bind, c_int, c_short, c_void, close, fcntl, read, setsockopt, sockaddr, socket, write, F_GETFL,
-    F_SETFL, O_NONBLOCK, SOCK_DGRAM,
-};
+use libc::{bind, c_int, c_short, c_void, close, fcntl, read, setsockopt, sockaddr, socket, write, F_GETFL, F_SETFL, O_NONBLOCK, SOCK_DGRAM, EINPROGRESS};
 use nix::net::if_::if_nametoindex;
 use std::convert::TryFrom;
 use std::convert::TryInto;
@@ -56,6 +53,43 @@ use std::num::TryFromIntError;
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 use std::time::Duration;
 use thiserror::Error;
+
+pub trait ShouldRetry {
+    /// Check for timeout
+    ///
+    /// If `true`, the error is probably due to a timeout.
+    fn should_retry(&self) -> bool;
+}
+
+impl ShouldRetry for io::Error {
+    fn should_retry(&self) -> bool {
+        match self.kind() {
+            // EAGAIN, EINPROGRESS and EWOULDBLOCK are the three possible codes
+            // returned when a timeout occurs. the stdlib already maps EAGAIN
+            // and EWOULDBLOCK os WouldBlock
+            io::ErrorKind::WouldBlock => true,
+            // however, EINPROGRESS is also valid
+            io::ErrorKind::Other => {
+                if let Some(i) = self.raw_os_error() {
+                    i == EINPROGRESS
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+impl<E> ShouldRetry for io::Result<E> {
+    fn should_retry(&self) -> bool {
+        if let &Err(ref e) = self {
+            e.should_retry()
+        } else {
+            false
+        }
+    }
+}
 
 /// CAN address family
 pub const AF_CAN: c_short = 29;
@@ -95,7 +129,7 @@ pub const CAN_ISOTP_LL_OPTS: c_int = 5;
 pub const CAN_MAX_DLEN: u8 = 8;
 
 /// Size of buffer allocated for reading TP data
-const RECV_BUFFER_SIZE: usize = 4096;
+pub const RECV_BUFFER_SIZE: usize = 4096;
 
 /// Size of a canframe, constant to reduce crate dependencies
 /// `std::mem::size_of::<socketcan::CANFrame>())`
@@ -627,18 +661,48 @@ impl IsoTpSocket {
         Ok(&self.recv_buffer[0..read_rv.try_into().unwrap()])
     }
 
-    /// Blocking write a slice of data
-    pub fn write(&self, buffer: &[u8]) -> io::Result<()> {
-        let write_rv = unsafe {
-            let buffer_ptr = buffer as *const _ as *const c_void;
-            write(self.fd, buffer_ptr, buffer.len())
-        };
+    pub fn read_to_buffer(&self) -> io::Result<[u8; 4096]> {
+        let mut buffer : [u8; RECV_BUFFER_SIZE] = [0; 4096];
+        let buffer_ptr = &mut buffer as *mut _ as *mut c_void;
 
-        if write_rv != buffer.len().try_into().unwrap() {
+        let read_rv = unsafe { read(self.fd, buffer_ptr, RECV_BUFFER_SIZE) };
+
+        if read_rv < 0 {
             return Err(io::Error::last_os_error());
         }
 
+        Ok(buffer)
+    }
+
+    /// Blocking write a slice of data
+    pub fn write(&self, buffer: &[u8]) -> io::Result<()> {
+        eprintln!("writing {:?}", buffer);
+        let buffer = [1, 2, 3];
+        let buff_ref = &buffer;
+        let write_rv = unsafe {
+            let buffer_ptr = buff_ref as *const _ as *const c_void;
+            write(self.fd, buffer_ptr, buffer.len())
+        };
+        eprintln!("in the middle of writing {:?}", write_rv);
+        if write_rv != buffer.len().try_into().unwrap() {
+            eprintln!("it borked");
+            return Err(io::Error::last_os_error());
+        }
+        eprintln!("done writing");
         Ok(())
+    }
+
+    pub fn write_insist(&self, buffer: &[u8]) -> io::Result<()> {
+        loop {
+            match self.write(buffer){
+                Ok(ret) => return Ok(ret),
+                Err(e) => {
+                    if !e.should_retry() {
+                        return Err(e);
+                    }
+                }
+            }
+        }
     }
 }
 
