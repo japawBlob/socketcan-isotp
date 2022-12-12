@@ -627,6 +627,19 @@ impl IsoTpSocket {
         Ok(&self.recv_buffer[0..read_rv.try_into().unwrap()])
     }
 
+    pub fn read_to_buffer(&self) -> io::Result<[u8; 4096]> {
+        let mut buffer : [u8; RECV_BUFFER_SIZE] = [0; 4096];
+        let buffer_ptr = &mut buffer as *mut _ as *mut c_void;
+
+        let read_rv = unsafe { read(self.fd, buffer_ptr, RECV_BUFFER_SIZE) };
+
+        if read_rv < 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(buffer)
+    }
+
     /// Blocking write a slice of data
     pub fn write(&self, buffer: &[u8]) -> io::Result<()> {
         let write_rv = unsafe {
