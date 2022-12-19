@@ -661,8 +661,8 @@ impl IsoTpSocket {
         Ok(&self.recv_buffer[0..read_rv.try_into().unwrap()])
     }
 
-    pub fn read_to_buffer(&self) -> io::Result<[u8; 4096]> {
-        let mut buffer : [u8; RECV_BUFFER_SIZE] = [0; 4096];
+    pub fn read_to_buffer(&self) -> io::Result<Vec<u8>> {
+        let mut buffer : [u8; RECV_BUFFER_SIZE] = [0; RECV_BUFFER_SIZE];
         let buffer_ptr = &mut buffer as *mut _ as *mut c_void;
 
         let read_rv = unsafe { read(self.fd, buffer_ptr, RECV_BUFFER_SIZE) };
@@ -671,28 +671,29 @@ impl IsoTpSocket {
             return Err(io::Error::last_os_error());
         }
 
-        Ok(buffer)
+        Ok(buffer[0 .. read_rv.try_into().unwrap()].to_vec())
     }
 
     /// Blocking write a slice of data
-    pub fn write(&self, buffer: &[u8]) -> io::Result<()> {
-        eprintln!("writing {:?}", buffer);
-        let buffer = [1, 2, 3];
-        let buff_ref = &buffer;
+    pub fn write(&self, buffer: &Vec<u8>) -> io::Result<()> {
+        //eprintln!("writing {:?}", buffer);
+        // let buffer : [u8; 6] = [1, 2, 3, 4, 5, 6];
+        // let buff_ref = &buffer;
+        let buffer : &[u8] = buffer.as_slice();
         let write_rv = unsafe {
-            let buffer_ptr = buff_ref as *const _ as *const c_void;
+            let buffer_ptr = buffer as *const _ as *const c_void;
             write(self.fd, buffer_ptr, buffer.len())
         };
-        eprintln!("in the middle of writing {:?}", write_rv);
+        //eprintln!("in the middle of writing {:?}", write_rv);
         if write_rv != buffer.len().try_into().unwrap() {
-            eprintln!("it borked");
+            //eprintln!("it borked");
             return Err(io::Error::last_os_error());
         }
-        eprintln!("done writing");
+        //eprintln!("done writing");
         Ok(())
     }
 
-    pub fn write_insist(&self, buffer: &[u8]) -> io::Result<()> {
+    pub fn write_insist(&self, buffer: &Vec<u8>) -> io::Result<()> {
         loop {
             match self.write(buffer){
                 Ok(ret) => return Ok(ret),
