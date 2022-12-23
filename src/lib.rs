@@ -51,6 +51,7 @@ use std::io;
 use std::mem::size_of;
 use std::num::TryFromIntError;
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+use std::thread::sleep_ms;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -690,6 +691,7 @@ impl IsoTpSocket {
             return Err(io::Error::last_os_error());
         }
         //eprintln!("done writing");
+        //sleep_ms(10);
         Ok(())
     }
 
