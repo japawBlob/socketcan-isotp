@@ -43,7 +43,7 @@
 
 use bitflags::bitflags;
 pub use embedded_can::{ExtendedId, Id, StandardId};
-use libc::{bind, c_int, c_short, c_void, close, fcntl, read, setsockopt, sockaddr, socket, write, F_GETFL, F_SETFL, O_NONBLOCK, SOCK_DGRAM, EINPROGRESS};
+use libc::{bind, c_int, c_short, c_void, close, fcntl, read, setsockopt, sockaddr, socket, write, F_GETFL, F_SETFL, O_NONBLOCK, SOCK_DGRAM};
 use nix::net::if_::if_nametoindex;
 use std::convert::TryFrom;
 use std::convert::TryInto;
@@ -51,46 +51,8 @@ use std::io;
 use std::mem::size_of;
 use std::num::TryFromIntError;
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
-use std::thread::sleep_ms;
 use std::time::Duration;
 use thiserror::Error;
-
-pub trait ShouldRetry {
-    /// Check for timeout
-    ///
-    /// If `true`, the error is probably due to a timeout.
-    fn should_retry(&self) -> bool;
-}
-
-impl ShouldRetry for io::Error {
-    fn should_retry(&self) -> bool {
-        match self.kind() {
-            // EAGAIN, EINPROGRESS and EWOULDBLOCK are the three possible codes
-            // returned when a timeout occurs. the stdlib already maps EAGAIN
-            // and EWOULDBLOCK os WouldBlock
-            io::ErrorKind::WouldBlock => true,
-            // however, EINPROGRESS is also valid
-            io::ErrorKind::Other => {
-                if let Some(i) = self.raw_os_error() {
-                    i == EINPROGRESS
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        }
-    }
-}
-
-impl<E> ShouldRetry for io::Result<E> {
-    fn should_retry(&self) -> bool {
-        if let &Err(ref e) = self {
-            e.should_retry()
-        } else {
-            false
-        }
-    }
-}
 
 /// CAN address family
 pub const AF_CAN: c_short = 29;
@@ -662,7 +624,19 @@ impl IsoTpSocket {
         Ok(&self.recv_buffer[0..read_rv.try_into().unwrap()])
     }
 
-    pub fn read_to_buffer(&self) -> io::Result<Vec<u8>> {
+    pub fn write(&self, buffer: &Vec<u8>) -> io::Result<()> {
+        let buffer : &[u8] = buffer.as_slice();
+        let write_rv = unsafe {
+            let buffer_ptr = buffer as *const _ as *const c_void;
+            write(self.fd, buffer_ptr, buffer.len())
+        };
+        if write_rv != buffer.len().try_into().unwrap() {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub fn read_to_vec(&self) -> io::Result<Vec<u8>> {
         let mut buffer : [u8; RECV_BUFFER_SIZE] = [0; RECV_BUFFER_SIZE];
         let buffer_ptr = &mut buffer as *mut _ as *mut c_void;
 
@@ -676,36 +650,16 @@ impl IsoTpSocket {
     }
 
     /// Blocking write a slice of data
-    pub fn write(&self, buffer: &Vec<u8>) -> io::Result<()> {
-        //eprintln!("writing {:?}", buffer);
-        // let buffer : [u8; 6] = [1, 2, 3, 4, 5, 6];
-        // let buff_ref = &buffer;
+    pub fn write_vec(&self, buffer: &Vec<u8>) -> io::Result<()> {
         let buffer : &[u8] = buffer.as_slice();
         let write_rv = unsafe {
             let buffer_ptr = buffer as *const _ as *const c_void;
             write(self.fd, buffer_ptr, buffer.len())
         };
-        //eprintln!("in the middle of writing {:?}", write_rv);
         if write_rv != buffer.len().try_into().unwrap() {
-            //eprintln!("it borked");
             return Err(io::Error::last_os_error());
         }
-        //eprintln!("done writing");
-        //sleep_ms(10);
         Ok(())
-    }
-
-    pub fn write_insist(&self, buffer: &Vec<u8>) -> io::Result<()> {
-        loop {
-            match self.write(buffer){
-                Ok(ret) => return Ok(ret),
-                Err(e) => {
-                    if !e.should_retry() {
-                        return Err(e);
-                    }
-                }
-            }
-        }
     }
 }
 
