@@ -43,10 +43,7 @@
 
 use bitflags::bitflags;
 pub use embedded_can::{ExtendedId, Id, StandardId};
-use libc::{
-    bind, c_int, c_short, c_void, close, fcntl, read, setsockopt, sockaddr, socket, write, F_GETFL,
-    F_SETFL, O_NONBLOCK, SOCK_DGRAM,
-};
+use libc::{bind, c_int, c_short, c_void, close, fcntl, read, setsockopt, sockaddr, socket, write, F_GETFL, F_SETFL, O_NONBLOCK, SOCK_DGRAM};
 use nix::net::if_::if_nametoindex;
 use std::convert::TryFrom;
 use std::convert::TryInto;
@@ -95,7 +92,7 @@ pub const CAN_ISOTP_LL_OPTS: c_int = 5;
 pub const CAN_MAX_DLEN: u8 = 8;
 
 /// Size of buffer allocated for reading TP data
-const RECV_BUFFER_SIZE: usize = 4096;
+pub const RECV_BUFFER_SIZE: usize = 4096;
 
 /// Size of a canframe, constant to reduce crate dependencies
 /// `std::mem::size_of::<socketcan::CANFrame>())`
@@ -627,8 +624,20 @@ impl IsoTpSocket {
         Ok(&self.recv_buffer[0..read_rv.try_into().unwrap()])
     }
 
-    pub fn read_to_buffer(&self) -> io::Result<[u8; 4096]> {
-        let mut buffer : [u8; RECV_BUFFER_SIZE] = [0; 4096];
+    pub fn write(&self, buffer: &Vec<u8>) -> io::Result<()> {
+        let buffer : &[u8] = buffer.as_slice();
+        let write_rv = unsafe {
+            let buffer_ptr = buffer as *const _ as *const c_void;
+            write(self.fd, buffer_ptr, buffer.len())
+        };
+        if write_rv != buffer.len().try_into().unwrap() {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub fn read_to_vec(&self) -> io::Result<Vec<u8>> {
+        let mut buffer : [u8; RECV_BUFFER_SIZE] = [0; RECV_BUFFER_SIZE];
         let buffer_ptr = &mut buffer as *mut _ as *mut c_void;
 
         let read_rv = unsafe { read(self.fd, buffer_ptr, RECV_BUFFER_SIZE) };
@@ -637,20 +646,19 @@ impl IsoTpSocket {
             return Err(io::Error::last_os_error());
         }
 
-        Ok(buffer)
+        Ok(buffer[0 .. read_rv.try_into().unwrap()].to_vec())
     }
 
     /// Blocking write a slice of data
-    pub fn write(&self, buffer: &[u8]) -> io::Result<()> {
+    pub fn write_vec(&self, buffer: &Vec<u8>) -> io::Result<()> {
+        let buffer : &[u8] = buffer.as_slice();
         let write_rv = unsafe {
             let buffer_ptr = buffer as *const _ as *const c_void;
             write(self.fd, buffer_ptr, buffer.len())
         };
-
         if write_rv != buffer.len().try_into().unwrap() {
             return Err(io::Error::last_os_error());
         }
-
         Ok(())
     }
 }
